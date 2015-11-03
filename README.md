@@ -16,7 +16,7 @@ At the source directory (where **build.sbt** is located) run ```sbt (clean) pack
 Invoke ```sbt (clean) assembly``` in console/shell (requires `sbt-assembly`; automatically pulled in by sbt).
 
 ## Run the program
-The program can be run in three modes
+The program can be run in three modes <br/>
 * Locally <br/>
 One can run locally by invoking ```sbt 'run -l -o OUTPUT -i INPUT_DATA'``` (Do not forget the `-l` or `-runLocally` flag) <br/>
 * Using `spark-submit` <br/>
