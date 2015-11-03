@@ -20,10 +20,11 @@ One can run locally by invoking ```sbt 'run -l -o OUTPUT -i INPUT_DATA'``` (Do n
 - Using `spark-submit`
 Alternatively one can run on Spark using 
 
-
+```
 spark-submit \ 
 --class "com.aol.advertising.experimental.Driver" \ 
 --master "local[4]" \    ([4] signifies number of cores; optionally run on Spark cluster by specifying address here) 
 TARGET_ASSEMBLY_JAR \    (usually inside target directory, if assembly/packaging was successful)
 TARGET_INPUT_OPTIONS     (e.g. '-i INPUT_DATA -o OUTPUT_NAME')
-
+```
+Refer the Spark documentation for more options.
