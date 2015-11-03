@@ -10,16 +10,16 @@ Aol-ml is a generalized *Apache Spark ML* extension that currently includes *Fac
 Aol-ml is available on Stash: ``` git clone git clone https://stash.ops.aol.com/scm/adl/adl-aol-ml.git ``` <br/>
 
 ## Building/packaging the core
-At the source directory (where **build.sbt** is located) run ```sbt (clean) package``` in console/shell at the source <br \>
+At the source directory (where **build.sbt** is located) run ```sbt (clean) package``` in console/shell at the source <br/>
 
 ## Assembling the software (output is called fat-jar)
 Invoke ```sbt (clean) assembly``` in console/shell (requires `sbt-assembly`; automatically pulled in by sbt).
 
 ## Run the program
 The program can be run in three modes
-* Locally <br \>
-One can run locally by invoking ```sbt 'run -l -o OUTPUT -i INPUT_DATA'``` (Do not forget the `-l` or `-runLocally` flag)
-* Using `spark-submit`
+* Locally <br/>
+One can run locally by invoking ```sbt 'run -l -o OUTPUT -i INPUT_DATA'``` (Do not forget the `-l` or `-runLocally` flag) <br/>
+* Using `spark-submit` <br/>
 Alternatively one can run on Spark using 
 
 ```
