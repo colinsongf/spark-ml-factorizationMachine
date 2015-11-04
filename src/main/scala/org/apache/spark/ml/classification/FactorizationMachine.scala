@@ -798,33 +798,37 @@ private class FMAggregator(coefficients: FMWeights,
 
       if (weight == 0.0) return this
 
-      var currentInterceptGradient = 0.0
-      val currentLinearGradientValues = Array.ofDim[Double](numFeatures)
+      val currentGradientVector: BDV[Double] =
+        BDV.zeros[Double](1 + numFeatures + numFeatures * latentDimension)
       numClasses match {
         case 2 =>
           // For Binary.
           val margin = - {
             var sum = 0.0
+
             features.foreachActive { (index, value) =>
               if (featuresStd(index) != 0.0 && value != 0.0) {
                 sum += coefficients.linear(index) * (value / featuresStd(index))
               }
             }
-            sum + {
+
+            sum += {
               if (fitIntercept) coefficients.intercept else 0.0
             }
+
+            sum
           }
 
           val multiplier = weight * (1.0 / (1.0 + math.exp(margin)) - label)
 
           features.foreachActive { (index, value) =>
             if (featuresStd(index) != 0.0 && value != 0.0) {
-              currentLinearGradientValues(index) = multiplier * (value / featuresStd(index))
+              currentGradientVector(index + 1) = multiplier * (value / featuresStd(index))
             }
           }
 
           if (fitIntercept) {
-            currentInterceptGradient = multiplier
+            currentGradientVector(0) = multiplier
           }
 
           if (label > 0) {
@@ -838,9 +842,7 @@ private class FMAggregator(coefficients: FMWeights,
             "only supports binary classification for now.")
       }
       weightSum += weight
-      gradientSum += new FMWeights(currentInterceptGradient,
-        Vectors.dense(currentLinearGradientValues),
-        DenseMatrix.zeros(numFeatures, gradientSum.quadratic.numCols))                   //TODO: NEED CHANGE
+      gradientSum += FMWeights.fromBreezeVector(currentGradientVector, numFeatures, latentDimension)                  //TODO: NEED CHANGE
       this
     }
   }
