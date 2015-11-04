@@ -914,22 +914,18 @@ private class FMCostFun(instances: RDD[Instance],
      *
      * For intercept, no regularization
      */
-    val regularizationLinear = Array.ofDim[Double](numFeatures)
+    val regGradientVector:BDV[Double] = BDV.zeros[Double](1 + numFeatures + numFeatures * latentDimension)
 
     // regVal is the sum of coefficients squares excluding intercept for L2 regularization.
     val regVal = if (regParamL2 == 0.0) {
       0.0
     } else {
       var sum = 0.0
+      // Contributions from linear weights
       coeffs.linear.foreachActive { (index, value) =>
-        // If `fitIntercept` is true, the last term which is intercept doesn't
-        // contribute to the regularization.
-        if (index != numFeatures) {
-          // The following code will compute the loss of the regularization; also
-          // the gradient of the regularization, and add back to totalGradientArray.
           sum += {
             if (standardization) {
-              regularizationLinear(index) += regParamL2 * value
+              regGradientVector(index + 1) = regParamL2 * value
               value * value
             } else {
               if (featuresStd(index) != 0.0) {
@@ -939,23 +935,37 @@ private class FMCostFun(instances: RDD[Instance],
                 // differently to get effectively the same objective function when
                 // the training dataset is not standardized.
                 val temp = value / (featuresStd(index) * featuresStd(index))
-                regularizationLinear(index) += regParamL2 * temp
+                regGradientVector(index + 1) = regParamL2 * temp
                 value * temp
               } else {
                 0.0
               }
             }
           }
+      }
+
+      // Contributions from quadratic weights
+      coeffs.quadratic.foreachActive{ (row, col, value) =>
+        sum += {
+          if (standardization) {
+            regGradientVector(1 + numFeatures + latentDimension * row + col) = regParamL2 * value
+            value * value
+          }
+          else {
+            if (featuresStd(row) != 0.0 && featuresStd(col) != 0.0) {
+              val temp = value / (math.pow(featuresStd(row), 2) * math.pow(featuresStd(col), 2))
+              regGradientVector(1 + numFeatures + latentDimension * row + col) = regParamL2 * temp
+              value * temp
+            }
+            else 0.0
+          }
         }
       }
+
       0.5 * regParamL2 * sum
     }
 
-    val regGradient  = new FMWeights(
-      intercept = 0.0,
-      linear = Vectors.dense(regularizationLinear),
-      quadratic = DenseMatrix.zeros(numFeatures, coeffs.quadratic.numCols)                //TODO: NEED CHANGE
-    )
+    val regGradient  = FMWeights.fromBreezeVector(regGradientVector, numFeatures, latentDimension)
 
     (fmAggregator.loss + regVal, (fmAggregator.gradient + regGradient).flattenToBreezeVector)
   }
