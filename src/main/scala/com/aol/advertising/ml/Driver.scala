@@ -16,7 +16,7 @@ import scala.collection.immutable.HashSet
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, FileSystem}
 
-import org.apache.spark.ml.classification.{FactorizationMachine, LogisticRegression}
+import org.apache.spark.ml.classification.{NewLR, FactorizationMachine, LogisticRegression}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.{SparkContext, SparkConf}
 import org.apache.spark.sql.{DataFrame, Row, SQLContext}
@@ -159,7 +159,8 @@ object Driver {
      * (and the feature index map)
      */
     val trainingDataRddAndFeatureMap = sc.loadCsvFileAsRDD(
-      trainingDataFile,
+      "/Users/njoshi15/work/aol/adLearn/data/binCampaigns/sampled/test.gz",
+      //trainingDataFile,
       withHeader = true,
       separator = " ",
       selectColumns = columnsToSelect,
@@ -170,13 +171,15 @@ object Driver {
       .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
       .toDF("label", "features")
 
+
     /*
     * Test/validation data
     * (with the same loader specifications
     * as used in importing training data.)
     */
     val testData = sc.loadCsvFileAsRDD(
-      file = trainingDataFile.replaceFirst(".TR.gz", ".TR.gz"),
+      //file = "/Users/njoshi15/work/aol/adLearn/data/binCampaigns/sampled/test.gz",
+      trainingDataFile.replaceFirst(".TR.gz", ".TR.gz"),
       withFeatureIndexing = trainingDataRddAndFeatureMap.featureIndexMap,
       withLoaderParams = trainingDataRddAndFeatureMap.loaderParams
     ).data
@@ -190,7 +193,7 @@ object Driver {
      */
     val lr = new LogisticRegression()
       .setMaxIter(50)
-      .setRegParam(0.01)
+      .setRegParam(0.00)
       .setElasticNetParam(0.95)
 
     /*
@@ -198,14 +201,24 @@ object Driver {
      */
     val fMachine = new FactorizationMachine(0)
       .setMaxIter(50)
-      .setRegParam(0.01)
+      .setRegParam(0.00)
       .setElasticNetParam(0.95)
+
+    /*
+     * Test LR
+     */
+    val newLR = new NewLR()
+      .setMaxIter(50)
+      .setRegParam(0.00)
+      .setElasticNetParam(0.95)
+
 
     /*
      * Fit models
      */
     val lrModel = lr.fit(trainingData)
     val fmModel = fMachine.fit(trainingData)
+    val newlrModel = newLR.fit(trainingData)
 
     /*
      * Test data matching
@@ -232,10 +245,23 @@ object Driver {
       .toDF("fmProbability", "fmLabel", "id")
 
 
-    val joinedDF = fmTest.join(lrTest, usingColumn = "id")
+    val newlrTest = newlrModel
+      .transform(testData)
+      .select("label", "probability", "prediction")
+      .map{
+        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
+      }
+      .zipWithIndex()
+      .map{ case ((probability, label), index) => (probability, label, index)}
+      .toDF("newlrProbability", "newlrLabel", "id")
 
 
-    joinedDF.show(truncate = false)
+    val joinedDF = fmTest.join(lrTest, usingColumn = "id").join(newlrTest, usingColumn = "id")
+
+    import org.apache.spark.sql.functions._
+    joinedDF
+    //  .filter(joinedDF("fmProbability") !== joinedDF("lrProbability"))
+      .show(truncate = false)
 
     sc.stop()
   }

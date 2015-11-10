@@ -1,4 +1,4 @@
-import org.apache.spark.ml.classification.FMWeights
+//import org.apache.spark.ml.classification.FactorizationMachineWeights
 import org.apache.spark.mllib.linalg.{DenseMatrix, Vectors}
 
 /**
