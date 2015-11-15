@@ -168,7 +168,6 @@ class FactorizationMachine(override val uid: String,
     "Latent dimensionality must be a non-negative whole number. " +
       s"Found this.latentDimension = $latentDimension.")
 
-
   /**
    * Set the regularization parameter.
    * Default is 0.0.
@@ -309,23 +308,25 @@ class FactorizationMachine(override val uid: String,
         if (index == 0) {
           0.0
         }
-        // Other (Linear/quadratic terms)
+        // other (higher order) coefficients
         else {
           if ($(standardization)) {
             regParamL1
           } else {
-            // If `standardization` is false, we still standardize the data
-            // to improve the rate of convergence; as a result, we have to
-            // perform this reverse standardization by penalizing each component
-            // differently to get effectively the same objective function when
-            // the training dataset is not standardized.
+            // Linear terms
             if (index <= numFeatures)
-              if (featuresStd(index - 1) != 0.0) regParamL1 / featuresStd(index - 1) else 0.0
+            // Training was performed in standardized features.
+            // If standardization was not demanded, rescale the
+            // coefficients back to original scale
+              if (featuresStd(index - 1) != 0.0)
+                regParamL1 / featuresStd(index - 1)
+              else 0.0
+            // quadratic terms
             else {
               val (row, col) = FMCoefficients.getRowColIndexFromPosition(
                 index, numFeatures, latentDimension)
-              if (featuresStd(row) != 0.0 && featuresStd(col) != 0.0)
-                regParamL1 / (featuresStd(row) * featuresStd(col))
+              if (featuresStd(row) != 0.0)
+                regParamL1 / featuresStd(row)
               else 0.0
             }
           }
@@ -350,10 +351,11 @@ class FactorizationMachine(override val uid: String,
         numFeatures, latentDimension, scale = 1e-2)
     )
 
-    val initCoeffsBreezeVector = initialCoefficients.flattenToBreezeVector
+    // All the coefficients laid as a long vector
+    val initCoefficientLongVector = initialCoefficients.flattenToBreezeVector
 
     val states = optimizer.iterations(new CachedDiffFunction(costFun),
-      initCoeffsBreezeVector)
+      initCoefficientLongVector)
 
 
     val (coefficients, objectiveHistory) = {
@@ -387,14 +389,16 @@ class FactorizationMachine(override val uid: String,
         // linear weights
         if (runner <= numFeatures)
           rawCoefficients(runner) *= {
-            if (featuresStd(runner - 1) != 0.0) 1.0 / featuresStd(runner - 1)
+            if (featuresStd(runner - 1) != 0.0)
+              1.0 / featuresStd(runner - 1)
             else 0.0
           }
         else {
           // quadratic weights
           val (row, _) = FMCoefficients.getRowColIndexFromPosition(runner, numFeatures, latentDimension)
           rawCoefficients(runner) *= {
-            if (featuresStd(row) != 0.0) 1.0 / featuresStd(row)
+            if (featuresStd(row) != 0.0)
+              1.0 / featuresStd(row)
             else 0.0
           }
         }
@@ -412,6 +416,7 @@ class FactorizationMachine(override val uid: String,
     }
 
     if (handlePersistence) instances.unpersist()
+
 
     val model = copyValues(
       new FactorizationMachineModel(uid, coefficients)
@@ -462,22 +467,103 @@ class FactorizationMachine(override val uid: String,
  * Model produced by [[FactorizationMachine]].
  */
 @Experimental
+private object FactorizationMachineModel {
+
+  case class MarginData(margin: Double, auxiliaryVector: BDV[Double])
+
+  def MarginAndAuxiliarySum(features: Vector,
+                            coefficients: FMCoefficients,
+                            withIntercept: Boolean = true,
+                            featuresStd: Option[Array[Double]] = None)
+  : MarginData = {
+
+    // Standardized features
+    val standardizedFeatures = featuresStd match {
+      case Some(f) => Vectors.sparse(features.size,
+        features.toSparse.indices
+          .filter(idx => f(idx) != 0.0)
+          .map(idx => (idx, features(idx) / f(idx))).toSeq
+      )
+      case None => features
+    }
+
+
+    // Active (sparse) features
+    val activeFeatures = standardizedFeatures.toSparse.indices
+
+
+    // Auxiliary Vector
+    // k'th component = sum_j v_jk * feat_j
+    // Used (again) for calculating gradient w. r. t. quadratic weights
+    val auxiliaryVector = BDV.zeros[Double](coefficients.latentDimension)
+
+    var margin = 0.0
+
+    // intercept
+    margin += {
+      if (withIntercept) coefficients.intercept
+      else 0.0
+    }
+
+    // linear
+    margin +=
+      coefficients.linear.toBreeze.dot(standardizedFeatures.toBreeze)
+
+    // quadratic
+    margin +=       // TODO: NEED CHECK OF LOGIC
+      (0 to coefficients.quadratic.numCols - 1).map{col =>
+
+        // Sum over j
+        // The individual terms: v_jk * feat_j
+        // and the corresponding squares: v_jk^2 * feat_j^2
+        val termsAndSquaredTerms = activeFeatures
+          .map(idx => coefficients.quadratic(idx, col) * standardizedFeatures(idx)   )   // v_idx,col * f_idx
+          .map(value => List(value, math.pow(value, 2)) )    // (v_ij * f_i, v_ij^2f_i^2)
+          .toList              // (v1, v1^2) (v2, v2^2) ....
+          .transpose           // (v1,v2, v3 ...), (v1^2, v2^2, ....)
+
+        // Sum over k
+        // Sum of v_jk * feat_j
+        // and sum of v_jk^2 * feat_j^2
+        val sums = termsAndSquaredTerms
+          .map(_.sum)            // (v1 + v2 + ....), (v1^2 + v2^2 + ...)
+
+        // Only for clarity
+        val (sumOfTerms, sumOfSquaredTerms) = (sums.head, sums.last)
+
+        // j'th component of auxVec = sum_i v_ij * f_i
+        auxiliaryVector(col) = sumOfTerms
+
+        0.5 * (math.pow(sumOfTerms, 2) - sumOfSquaredTerms)
+      }.sum
+
+    MarginData(margin, auxiliaryVector)
+  }
+}
+
+
+
+@Experimental
 class FactorizationMachineModel private[ml] (
                                               override val uid: String,
-                                              val weights: FMCoefficients)
+                                              val coefficients: FMCoefficients)
   extends ProbabilisticClassificationModel[Vector, FactorizationMachineModel]
   with FactorizationMachineParams {
 
+
+  import FactorizationMachineModel._
+
+
   // TODO: Add override after Spark v > 1.5.1
-  val numFeatures: Int = weights.linear.size
+  val numFeatures: Int = coefficients.linear.size
 
-  val latentDimension: Int = weights.quadratic.numCols
+  val latentDimension: Int = coefficients.quadratic.numCols
 
-  require(weights.quadratic.numRows == numFeatures,
+  require(coefficients.quadratic.numRows == numFeatures,
     "Number of rows in quadratic weight matrix must be equal to numFeatures " +
       "(derived from linear weights size). " +
       s"Found this.numberOfFeatures = $numFeatures, " +
-      s"and this.quadratic.numRows = ${weights.quadratic.numRows}.")
+      s"and this.quadratic.numRows = ${coefficients.quadratic.numRows}.")
 
   /*
    * If all elements of Quadratic weights are zero,
@@ -486,7 +572,7 @@ class FactorizationMachineModel private[ml] (
    *
    * Set quadratic weights to non-zero values.
    */
-  if (latentDimension > 0 && weights.quadratic.numNonzeros == 0)
+  if (latentDimension > 0 && coefficients.quadratic.numNonzeros == 0)
     logError("Model does not learn the interactions, unless initialized with non-zero quadratic weights.")
 
 
@@ -496,42 +582,11 @@ class FactorizationMachineModel private[ml] (
 
   override def getThresholds: Array[Double] = super.getThresholds
 
-  /** Margin (rawPrediction) for class label 1.  For binary classification only. */
-  private val margin: Vector => Double = (features) => {
-    var output: Double = 0.0
-
-    // intercept
-    output += weights.intercept
-
-    // linear
-    output += BLAS.dot(features, weights.linear)
-
-    // quadratic
-    val activeElements = features.toSparse.indices.toIterable
-
-    output +=       // TODO: NEED CHECK OF LOGIC
-      (0 to latentDimension - 1).map{col =>
-        val sums = activeElements
-          .map(idx => weights.quadratic(idx, col) * features(idx))
-          .map(value => List(value, math.pow(value, 2)))
-          .toList
-          .transpose
-          .map(_.sum)
-
-        // Only for clarity
-        val (sumOfTerms, sumOfSquaredTerms) = (sums.head, sums.last)
-
-
-        0.5 * (math.pow(sumOfTerms, 2) - sumOfSquaredTerms)
-      }.sum
-
-    output
-  }
 
   /** Score (probability) for class label 1.  For binary classification only. */
   // TODO: Perhaps needs change if more generalized FM
   private val score: Vector => Double = (features) => {
-    val m = margin(features)
+    val m = MarginAndAuxiliarySum(features, coefficients).margin
     1.0 / (1.0 + math.exp(-m))
   }
 
@@ -543,7 +598,7 @@ class FactorizationMachineModel private[ml] (
    * thrown if `trainingSummary == None`.
    */
   def summary: FactorizationMachineTrainingSummary = trainingSummary match {
-    case Some(summ) => summ
+    case Some(smry) => smry
     case None =>
       throw new SparkException(
         "No training summary available for this FactorizationMachineModel",
@@ -594,13 +649,13 @@ class FactorizationMachineModel private[ml] (
   }
 
   override protected def predictRaw(features: Vector): Vector = {
-    val m = margin(features)
+    val m = MarginAndAuxiliarySum(features, coefficients).margin
     Vectors.dense(-m, m)
   }
 
 
   override def copy(extra: ParamMap): FactorizationMachineModel = {
-    val newModel = copyValues(new FactorizationMachineModel(uid, weights), extra)
+    val newModel = copyValues(new FactorizationMachineModel(uid, coefficients), extra)
     if (trainingSummary.isDefined) newModel.setSummary(trainingSummary.get)
     newModel.setParent(parent)
   }
@@ -769,6 +824,7 @@ private class FMAggregator(coefficients: FMCoefficients,
                            featuresStd: Array[Double],
                            featuresMean: Array[Double]) extends Serializable {
 
+  import FactorizationMachineModel._
 
   private val numFeatures = coefficients.linear.size
   private val latentDimension = coefficients.quadratic.numCols
@@ -798,34 +854,46 @@ private class FMAggregator(coefficients: FMCoefficients,
 
       val currentGradientVector: BDV[Double] =
         BDV.zeros[Double](1 + numFeatures + numFeatures * latentDimension)
+
       numClasses match {
         case 2 =>
           // For Binary.
-          val margin = - {
+          val marginAndAuxVec = MarginAndAuxiliarySum(
+            features = features,
+            coefficients = coefficients,
+            withIntercept = fitIntercept,
+            featuresStd = Some(featuresStd)
+          )
 
-            var output = {
-              if (fitIntercept) coefficients.intercept else 0.0
-            }
+          val margin = - marginAndAuxVec.margin
+          val auxiliaryVector = marginAndAuxVec.auxiliaryVector
 
-            output +=
-              features.toSparse.indices
-                .filter(idx => featuresStd(idx) != 0.0 && features(idx) != 0.0)
-                .map{idx => coefficients.linear(idx) * (features(idx) / featuresStd(idx))}
-                .sum
+          // The output error (label - prediction)
+          // Specific to Logistic Regression (and some link-loss match)
+          val outputDiscrepancy = weight * (1.0 / (1.0 + math.exp(margin)) - label)
 
-            output
+          // Gradient w.r.t. intercept = discrepancy * 1.0
+          if (fitIntercept) {
+            currentGradientVector(0) = outputDiscrepancy
           }
 
-          val multiplier = weight * (1.0 / (1.0 + math.exp(margin)) - label)
-
+          // Gradient w.r.t. linear weight (i) =
+          // discrepancy * feature(i) value
           features.foreachActive { (index, value) =>
             if (featuresStd(index) != 0.0 && value != 0.0) {
-              currentGradientVector(index + 1) = multiplier * (value / featuresStd(index))
+              currentGradientVector(index + 1) = outputDiscrepancy * (value / featuresStd(index))
             }
           }
 
-          if (fitIntercept) {
-            currentGradientVector(0) = multiplier
+          // Gradient w.r.t. quadratic weight(j, k) =
+          // discrepancy * [ feat_j * auxVec_k  - w_jk * feat_j^2 ]   // TODO: Check logic
+          for(index <- numFeatures + 1 to currentGradientVector.length - 1) {
+            val (row, col) = FMCoefficients.getRowColIndexFromPosition(index, numFeatures, latentDimension)
+            currentGradientVector(index) = outputDiscrepancy * (
+              features(row) * (
+                auxiliaryVector(col) - coefficients.quadratic(row, col) * features(row)
+                )
+              )
           }
 
           if (label > 0) {
@@ -839,7 +907,11 @@ private class FMAggregator(coefficients: FMCoefficients,
             "only supports binary classification for now.")
       }
       weightSum += weight
-      gradientSum += FMCoefficients.fromBreezeVector(currentGradientVector, numFeatures, latentDimension)                  //TODO: NEED CHANGE
+      gradientSum += FMCoefficients
+        .fromBreezeVector(
+          currentGradientVector,
+          numFeatures, latentDimension)                  //TODO: NEED CHANGE
+
       this
     }
   }
@@ -952,7 +1024,7 @@ private class FMCostFun(instances: RDD[Instance],
           }
           else {
             if (featuresStd(row) != 0.0) {
-            val temp = value / ( featuresStd(row) * featuresStd(row) )
+              val temp = value / ( featuresStd(row) * featuresStd(row) )
               regGradientVector(1 + numFeatures + latentDimension * row + col) = regParamL2 * temp
               value * temp
             }
@@ -1095,20 +1167,20 @@ private[classification] object FMCoefficients {
 
       val outputBdv: BDV[Double] = BDV.zeros[Double](1 + numFeatures + numFeatures * latentDimension)
 
-      // Column offset
+      // Runner along the long vector
       var runner: Int = 0
 
-      // Intercept is the only non-zero component in the fist column
+      // intercept
       outputBdv(runner) = FMCoefficients.intercept
       runner += 1
 
-      //Linear weights as second column
+      // Linear weights
       for (idx <- 0 to numFeatures - 1) {
         outputBdv(runner) = FMCoefficients.linear(idx)
         runner += 1
       }
 
-      // Quadratic weights go as the columns from third onwards
+      // Quadratic weights
       for (row <- 0 to numFeatures - 1)
         for (col <- 0 to latentDimension - 1) {
           outputBdv(runner) = FMCoefficients.quadratic(row, col)
