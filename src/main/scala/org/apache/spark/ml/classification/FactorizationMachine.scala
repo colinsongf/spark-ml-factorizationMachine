@@ -323,7 +323,7 @@ class FactorizationMachine(override val uid: String,
               else 0.0
             // quadratic terms
             else {
-              val (row, col) = FMCoefficients.getRowColIndexFromPosition(
+              val (row, _) = FMCoefficients.getRowColIndexFromPosition(
                 index, numFeatures, latentDimension)
               if (featuresStd(row) != 0.0)
                 regParamL1 / featuresStd(row)
@@ -568,12 +568,10 @@ class FactorizationMachineModel private[ml] (
   /*
    * If all elements of Quadratic weights are zero,
    * because update rule is proportional to the current value,
-   * model will not learn.
-   *
-   * Set quadratic weights to non-zero values.
+   * model will not learn interactions.
    */
   if (latentDimension > 0 && coefficients.quadratic.numNonzeros == 0)
-    logError("Model does not learn the interactions, unless initialized with non-zero quadratic weights.")
+    logWarning("Model does not learn the interactions, unless initialized with non-zero quadratic weights.")
 
 
   override val numClasses: Int = 2

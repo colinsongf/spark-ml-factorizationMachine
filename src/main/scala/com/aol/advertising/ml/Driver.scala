@@ -159,8 +159,7 @@ object Driver {
      * (and the feature index map)
      */
     val trainingDataRddAndFeatureMap = sc.loadCsvFileAsRDD(
-      "/Users/njoshi15/work/aol/adLearn/data/binCampaigns/sampled/test.gz",
-      //trainingDataFile,
+      trainingDataFile,
       withHeader = true,
       separator = " ",
       selectColumns = columnsToSelect,
@@ -178,7 +177,6 @@ object Driver {
     * as used in importing training data.)
     */
     val testData = sc.loadCsvFileAsRDD(
-      //file = "/Users/njoshi15/work/aol/adLearn/data/binCampaigns/sampled/test.gz",
       trainingDataFile.replaceFirst(".TR.gz", ".TR.gz"),
       withFeatureIndexing = trainingDataRddAndFeatureMap.featureIndexMap,
       withLoaderParams = trainingDataRddAndFeatureMap.loaderParams
@@ -193,24 +191,16 @@ object Driver {
      */
     val lr = new LogisticRegression()
       .setMaxIter(50)
-      .setRegParam(0.00)
+      .setRegParam(0.0001)
       .setElasticNetParam(0.95)
 
     /*
      * Factorization Machine
      */
-    val fMachine = new FactorizationMachine(1)
+    val fMachine = new FactorizationMachine(0)
       .setMaxIter(50)
-      .setRegParam(0.00)
+      .setRegParam(0.0001)
       .setElasticNetParam(0.95)
-
-//    /*
-//     * Test LR
-//     */
-//    val newLR = new NewLR()
-//      .setMaxIter(50)
-//      .setRegParam(0.00)
-//      .setElasticNetParam(0.95)
 
 
     /*
@@ -218,7 +208,6 @@ object Driver {
      */
     val lrModel = lr.fit(trainingData)
     val fmModel = fMachine.fit(trainingData)
- //   val newlrModel = newLR.fit(trainingData)
 
     /*
      * Test data matching
@@ -243,17 +232,6 @@ object Driver {
       .zipWithIndex()
       .map{ case ((probability, label), index) => (probability, label, index)}
       .toDF("fmProbability", "fmLabel", "id")
-
-
-//    val newlrTest = newlrModel
-//      .transform(testData)
-//      .select("label", "probability", "prediction")
-//      .map{
-//        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
-//      }
-//      .zipWithIndex()
-//      .map{ case ((probability, label), index) => (probability, label, index)}
-//      .toDF("newlrProbability", "newlrLabel", "id")
 
 
     val joinedDF = fmTest
