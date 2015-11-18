@@ -23,7 +23,7 @@ libraryDependencies ++= Seq(
   "org.apache.spark"              %%    "spark-sql"     %     sparkVer,
   "com.github.scopt"              %%    "scopt"         %     "3.3.0",
   "com.databricks"                %%    "spark-csv"     %     "1.2.0",
-  "org.scalatest"                 %%    "scalatest"     %     "2.2.4"     %     "test"
+  "com.holdenkarau"               % "spark-testing-base_2.10"   %   "1.5.1_0.2.1"
 )
 
 /*

@@ -36,7 +36,6 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.mllib.frommaster.MultivariateOnlineSummarizer
 import org.apache.spark.mllib.frommaster.{MultiClassSummarizer => NewMultiClassSummarizer}
 
-
 /**
  * Params for Factorization Machine.
  */

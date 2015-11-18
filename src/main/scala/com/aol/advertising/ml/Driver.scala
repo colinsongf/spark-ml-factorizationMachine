@@ -194,18 +194,16 @@ object Driver {
      */
     val lr = new LogisticRegression()
       .setMaxIter(50)
-      .setRegParam(0.001)
+      .setRegParam(0.000)
       .setElasticNetParam(0.95)
-      .setFitIntercept(false)
 
     /*
      * Factorization Machine
      */
-    val fMachine = new FactorizationMachine(0)
+    val fMachine = new FactorizationMachine(1)
       .setMaxIter(50)
-      .setRegParam(0.001)
+      .setRegParam(0.000)
       .setElasticNetParam(0.95)
-      .setFitIntercept(false)
 
     /*
      * Fit models
@@ -215,7 +213,7 @@ object Driver {
 
 
     println(s"${lrModel.intercept} ${lrModel.weights}")
-    println(s"${fmModel.coefficients.intercept} ${fmModel.coefficients.linear}")
+    println(s"${fmModel.coefficients.intercept} ${fmModel.coefficients.linear} ${fmModel.coefficients.quadratic}")
 
 //    /*
 //     * Test data matching
