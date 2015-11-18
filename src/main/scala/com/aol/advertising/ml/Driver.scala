@@ -161,14 +161,17 @@ object Driver {
     val trainingDataRddAndFeatureMap = sc.loadCsvFileAsRDD(
       trainingDataFile,
       withHeader = true,
-      separator = " ",
-      selectColumns = columnsToSelect,
-      categoricalFeatures = categoricalVariables)
+      separator = " ")
+     // selectColumns = columnsToSelect,
+     // categoricalFeatures = categoricalVariables)
 
     val trainingData = trainingDataRddAndFeatureMap.data
       .repartition(sc.defaultMinPartitions * 3)
       .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
       .toDF("label", "features")
+
+
+    trainingData.show(20, truncate = false)
 
 
     /*
@@ -191,17 +194,18 @@ object Driver {
      */
     val lr = new LogisticRegression()
       .setMaxIter(50)
-      .setRegParam(0.0001)
+      .setRegParam(0.001)
       .setElasticNetParam(0.95)
+      .setFitIntercept(false)
 
     /*
      * Factorization Machine
      */
     val fMachine = new FactorizationMachine(0)
       .setMaxIter(50)
-      .setRegParam(0.0001)
+      .setRegParam(0.001)
       .setElasticNetParam(0.95)
-
+      .setFitIntercept(false)
 
     /*
      * Fit models
@@ -209,38 +213,42 @@ object Driver {
     val lrModel = lr.fit(trainingData)
     val fmModel = fMachine.fit(trainingData)
 
-    /*
-     * Test data matching
-     */
-    val lrTest = lrModel
-      .transform(testData)
-      .select("label","probability", "prediction")
-      .map{
-        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
-      }
-      .zipWithIndex()
-      .map{ case ((probability, label), index) => (probability, label, index)}
-      .toDF("lrProbability", "lrLabel", "id")
 
+    println(s"${lrModel.intercept} ${lrModel.weights}")
+    println(s"${fmModel.coefficients.intercept} ${fmModel.coefficients.linear}")
 
-    val fmTest = fmModel
-      .transform(testData)
-      .select("label", "probability", "prediction")
-      .map{
-        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
-      }
-      .zipWithIndex()
-      .map{ case ((probability, label), index) => (probability, label, index)}
-      .toDF("fmProbability", "fmLabel", "id")
-
-
-    val joinedDF = fmTest
-      .join(lrTest, usingColumn = "id")
-      //.join(newlrTest, usingColumn = "id")
-
-    joinedDF
-    //  .filter(joinedDF("fmProbability") !== joinedDF("lrProbability"))
-      .show(truncate = false)
+//    /*
+//     * Test data matching
+//     */
+//    val lrTest = lrModel
+//      .transform(testData)
+//      .select("label","probability", "prediction")
+//      .map{
+//        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
+//      }
+//      .zipWithIndex()
+//      .map{ case ((probability, label), index) => (probability, label, index)}
+//      .toDF("lrProbability", "lrLabel", "id")
+//
+//
+//    val fmTest = fmModel
+//      .transform(testData)
+//      .select("label", "probability", "prediction")
+//      .map{
+//        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
+//      }
+//      .zipWithIndex()
+//      .map{ case ((probability, label), index) => (probability, label, index)}
+//      .toDF("fmProbability", "fmLabel", "id")
+//
+//
+//    val joinedDF = fmTest
+//      .join(lrTest, usingColumn = "id")
+//      //.join(newlrTest, usingColumn = "id")
+//
+//    joinedDF
+//    //  .filter(joinedDF("fmProbability") !== joinedDF("lrProbability"))
+//      .show(truncate = false)
 
     sc.stop()
   }

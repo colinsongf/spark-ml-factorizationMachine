@@ -31,7 +31,7 @@ object FileLoader {
   /*
    * Logger
    */
-    val log = Logger.getLogger(getClass.getName)
+  val log = Logger.getLogger(getClass.getName)
 
   /*
    * Methods of standardizing datasets
@@ -200,6 +200,7 @@ object FileLoader {
           }
       }
 
+
       val selectColumnIndices =
         header
           .zipWithIndex
@@ -207,6 +208,8 @@ object FileLoader {
           .map(_._2)
           .toSet
 
+      require(selectColumnIndices.nonEmpty,
+        "no column pass selection criteria. Resulting dataset will be empty.")
 
       /*
        * Final Categorical features and the respective
@@ -300,6 +303,7 @@ object FileLoader {
       }
 
       val data = sparseVW.map { case(label: Double, featureValueArray: Array[(String, Double)]) =>
+
         val featureVector = Vectors.sparse(
           numberOfFeatures,
           featureValueArray
