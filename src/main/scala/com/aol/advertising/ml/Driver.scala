@@ -201,7 +201,7 @@ object Driver {
      * Factorization Machine
      */
     val fMachine = new FactorizationMachine(1)
-      .setMaxIter(50)
+      .setMaxIter(1000)
       .setRegParam(0.000)
       .setElasticNetParam(0.95)
 

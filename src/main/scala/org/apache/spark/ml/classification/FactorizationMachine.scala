@@ -11,6 +11,8 @@
 
 package org.apache.spark.ml.classification
 
+import breeze.optimize.StochasticGradientDescent.SimpleSGD
+
 import scala.collection.mutable
 import scala.util.Random
 
@@ -297,42 +299,10 @@ class FactorizationMachine(override val uid: String,
       $(standardization),
       featuresStd,
       featuresMean,
-      regParamL2)
+      $(regParam),
+    $(elasticNetParam))
 
-    val optimizer = if ($(elasticNetParam) == 0.0 || $(regParam) == 0.0) {
-      new LBFGS[BDV[Double]]($(maxIter), 10, $(tol))
-    } else {
-      def regParamL1Fun = (index: Int) => {
-        // intercept: No regularization/penalization
-        if (index == 0) {
-          0.0
-        }
-        // other (higher order) coefficients
-        else {
-          if ($(standardization)) {
-            regParamL1
-          } else {
-            // Linear terms
-            if (index <= numFeatures)
-            // Training was performed in standardized features.
-            // If standardization was not demanded, rescale the
-            // coefficients back to original scale
-              if (featuresStd(index - 1) != 0.0)
-                regParamL1 / featuresStd(index - 1)
-              else 0.0
-            // quadratic terms
-            else {
-              val (row, _) = FMCoefficients.getRowColIndexFromPosition(
-                index, numFeatures, latentDimension)
-              if (featuresStd(row) != 0.0)
-                regParamL1 / featuresStd(row)
-              else 0.0
-            }
-          }
-        }
-      }
-      new OWLQN[Int, BDV[Double]]($(maxIter), 10, regParamL1Fun, $(tol))
-    }
+    val optimizer = new SimpleSGD[BDV[Double]](maxIter = $(maxIter))
 
     /*
      * Initialize factorization Machine weights
@@ -962,7 +932,13 @@ private class FMCostFun(instances: RDD[Instance],
                         standardization: Boolean,
                         featuresStd: Array[Double],
                         featuresMean: Array[Double],
-                        regParamL2: Double) extends DiffFunction[BDV[Double]] {
+                        regParam: Double,
+                         elasticNetParam: Double) extends DiffFunction[BDV[Double]] {
+
+
+  val regParamL1 = elasticNetParam * regParam
+  val regParamL2 = (1.0 - elasticNetParam) * regParam
+
 
   override def calculate(coefficients: BDV[Double]): (Double, BDV[Double]) = {
     val numFeatures = featuresStd.length
@@ -985,7 +961,7 @@ private class FMCostFun(instances: RDD[Instance],
     val regGradientVector:BDV[Double] = BDV.zeros[Double](1 + numFeatures + numFeatures * latentDimension)
 
     // regVal is the sum of coefficients squares excluding intercept for L2 regularization.
-    val regVal = if (regParamL2 == 0.0) {
+    val regVal = if (regParam == 0.0) {
       0.0
     } else {
       var sum = 0.0
@@ -993,7 +969,7 @@ private class FMCostFun(instances: RDD[Instance],
       coeffs.linear.foreachActive { (index, value) =>
         sum += {
           if (standardization) {
-            regGradientVector(index + 1) = regParamL2 * value
+            regGradientVector(index + 1) = regParamL1 + regParamL2 * value
             value * value
           } else {
             if (featuresStd(index) != 0.0) {
@@ -1003,7 +979,7 @@ private class FMCostFun(instances: RDD[Instance],
               // differently to get effectively the same objective function when
               // the training dataset is not standardized.
               val temp = value / (featuresStd(index) * featuresStd(index))
-              regGradientVector(index + 1) = regParamL2 * temp
+              regGradientVector(index + 1) = regParamL1 / featuresStd(index - 1) + regParamL2 * temp
               value * temp
             } else {
               0.0
@@ -1016,13 +992,13 @@ private class FMCostFun(instances: RDD[Instance],
       coeffs.quadratic.foreachActive{ (row, col, value) =>
         sum += {
           if (standardization) {
-            regGradientVector(1 + numFeatures + latentDimension * row + col) = regParamL2 * value
+            regGradientVector(1 + numFeatures + latentDimension * row + col) = regParamL1 + regParamL2 * value
             value * value
           }
           else {
             if (featuresStd(row) != 0.0) {
               val temp = value / ( featuresStd(row) * featuresStd(row) )
-              regGradientVector(1 + numFeatures + latentDimension * row + col) = regParamL2 * temp
+              regGradientVector(1 + numFeatures + latentDimension * row + col) = regParamL1 / featuresStd(row) + regParamL2 * temp
               value * temp
             }
             else 0.0
