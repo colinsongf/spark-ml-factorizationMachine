@@ -886,11 +886,14 @@ private class FMAggregator(coefficients: FMCoefficients,
           // discrepancy * [ feat_j * auxVec_k  - w_jk * feat_j^2 ]   // TODO: Check logic
           for(index <- numFeatures + 1 to currentGradientVector.length - 1) {
             val (row, col) = FMCoefficients.getRowColIndexFromPosition(index, numFeatures, latentDimension)
-            currentGradientVector(index) = outputDiscrepancy * (
-              features(row) * (
-                auxiliaryVector(col) - coefficients.quadratic(row, col) * features(row)
+            if (featuresStd(row) != 0.0 && features(row) != 0.0) {
+              val value = features(row) / featuresStd(row)
+              currentGradientVector(index) = outputDiscrepancy * (
+                value * (
+                  auxiliaryVector(col) - coefficients.quadratic(row, col) * value
+                  )
                 )
-              )
+            }
           }
 
           if (label > 0) {
