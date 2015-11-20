@@ -11,12 +11,13 @@
 
 package org.apache.spark.ml.classification
 
-import breeze.optimize.StochasticGradientDescent.SimpleSGD
+import breeze.optimize.AdaptiveGradientDescent.L2Regularization
+import org.apache.spark.ml.{PredictionModel, Predictor, PredictorParams}
 
 import scala.collection.mutable
 import scala.util.Random
 
-import breeze.linalg.{DenseVector => BDV, sum}
+import breeze.linalg.{DenseVector => BDV}
 import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
 
 import com.github.fommil.netlib.F2jBLAS
@@ -41,112 +42,10 @@ import org.apache.spark.mllib.frommaster.{MultiClassSummarizer => NewMultiClassS
 /**
  * Params for Factorization Machine.
  */
-private[classification] trait FactorizationMachineParams extends ProbabilisticClassifierParams
+private[classification] trait FactorizationMachineParams extends PredictorParams
 with HasRegParam with HasElasticNetParam with HasMaxIter with HasFitIntercept with HasTol
-with HasStandardization with HasWeightCol with HasThreshold {
-
-  /**
-   * Set threshold in binary classification, in range [0, 1].
-   *
-   * If the estimated probability of class label 1 is > threshold, then predict 1, else 0.
-   * A high threshold encourages the model to predict 0 more often;
-   * a low threshold encourages the model to predict 1 more often.
-   *
-   * Note: Calling this with threshold p is equivalent to calling `setThresholds(Array(1-p, p))`.
-   *       When [[setThreshold()]] is called, any user-set value for [[thresholds]] will be cleared.
-   *       If both [[threshold]] and [[thresholds]] are set in a ParamMap, then they must be
-   *       equivalent.
-   *
-   * Default is 0.5.
-   * @group setParam
-   */
-  def setThreshold(value: Double): this.type = {
-    if (isSet(thresholds)) clear(thresholds)
-    set(threshold, value)
-  }
-
-  /**
-   * Get threshold for binary classification.
-   *
-   * If [[threshold]] is set, returns that value.
-   * Otherwise, if [[thresholds]] is set with length 2 (i.e., binary classification),
-   * this returns the equivalent threshold: {{{1 / (1 + thresholds(0) / thresholds(1))}}}.
-   * Otherwise, returns [[threshold]] default value.
-   *
-   * @group getParam
-   * @throws IllegalArgumentException if [[thresholds]] is set to an array of length other than 2.
-   */
-  override def getThreshold: Double = {
-    checkThresholdConsistency()
-    if (isSet(thresholds)) {
-      val ts = $(thresholds)
-      require(ts.length == 2, "Factorization Machine getThreshold only applies to" +
-        " binary classification, but thresholds has length != 2.  thresholds: " + ts.mkString(","))
-      1.0 / (1.0 + ts(0) / ts(1))
-    } else {
-      $(threshold)
-    }
-  }
-
-  /**
-   * Set thresholds in multiclass (or binary) classification to adjust the probability of
-   * predicting each class. Array must have length equal to the number of classes, with values >= 0.
-   * The class with largest value p/t is predicted, where p is the original probability of that
-   * class and t is the class' threshold.
-   *
-   * Note: When [[setThresholds()]] is called, any user-set value for [[threshold]] will be cleared.
-   *       If both [[threshold]] and [[thresholds]] are set in a ParamMap, then they must be
-   *       equivalent.
-   *
-   * @group setParam
-   */
-  def setThresholds(value: Array[Double]): this.type = {
-    if (isSet(threshold)) clear(threshold)
-    set(thresholds, value)
-  }
-
-  /**
-   * Get thresholds for binary or multiclass classification.
-   *
-   * If [[thresholds]] is set, return its value.
-   * Otherwise, if [[threshold]] is set, return the equivalent thresholds for binary
-   * classification: (1-threshold, threshold).
-   * If neither are set, throw an exception.
-   *
-   * @group getParam
-   */
-  override def getThresholds: Array[Double] = {
-    checkThresholdConsistency()
-    if (!isSet(thresholds) && isSet(threshold)) {
-      val t = $(threshold)
-      Array(1-t, t)
-    } else {
-      $(thresholds)
-    }
-  }
-
-  /**
-   * If [[threshold]] and [[thresholds]] are both set, ensures they are consistent.
-   * @throws IllegalArgumentException if [[threshold]] and [[thresholds]] are not equivalent
-   */
-  protected def checkThresholdConsistency(): Unit = {
-    if (isSet(threshold) && isSet(thresholds)) {
-      val ts = $(thresholds)
-      require(ts.length == 2, "Factorization Machine found inconsistent values for threshold and" +
-        s" thresholds.  Param threshold is set (${$(threshold)}), indicating binary" +
-        s" classification, but Param thresholds is set with length ${ts.length}." +
-        " Clear one Param value to fix this problem.")
-      val t = 1.0 / (1.0 + ts(0) / ts(1))
-      require(math.abs($(threshold) - t) < 1E-5, "Factorization Machine getThreshold found" +
-        s" inconsistent values for threshold (${$(threshold)}) and thresholds (equivalent to $t)")
-    }
-  }
-
-  override def validateParams(): Unit = {
-    checkThresholdConsistency()
-  }
+with HasStandardization with HasWeightCol {
 }
-
 
 /**
  * :: Experimental ::
@@ -157,8 +56,9 @@ with HasStandardization with HasWeightCol with HasThreshold {
 @Experimental
 class FactorizationMachine(override val uid: String,
                            val latentDimension: Int)
-  extends ProbabilisticClassifier[Vector, FactorizationMachine, FactorizationMachineModel]
-  with FactorizationMachineParams with Logging {
+  extends Predictor[Vector, FactorizationMachine, FactorizationMachineModel]
+  with FactorizationMachineParams
+  with Logging {
 
   def this(latentDimension: Int) = this(
     Identifiable.randomUID("factormachine"),
@@ -224,9 +124,6 @@ class FactorizationMachine(override val uid: String,
   def setStandardization(value: Boolean): this.type = set(standardization, value)
   setDefault(standardization -> true)
 
-  override def setThreshold(value: Double): this.type = super.setThreshold(value)
-
-  override def getThreshold: Double = super.getThreshold
 
   /**
    * Whether to over-/under-sample training instances according to the given weights in weightCol.
@@ -237,9 +134,6 @@ class FactorizationMachine(override val uid: String,
   def setWeightCol(value: String): this.type = set(weightCol, value)
   setDefault(weightCol -> "")
 
-  override def setThresholds(value: Array[Double]): this.type = super.setThresholds(value)
-
-  override def getThresholds: Array[Double] = super.getThresholds
 
   override protected def train(dataset: DataFrame): FactorizationMachineModel = {
     // Extract data
@@ -287,10 +181,6 @@ class FactorizationMachine(override val uid: String,
     val featuresMean = summarizer.mean.toArray
     val featuresStd = summarizer.variance.toArray.map(math.sqrt)
 
-
-    val regParamL1 = $(elasticNetParam) * $(regParam)
-    val regParamL2 = (1.0 - $(elasticNetParam)) * $(regParam)
-
     val costFun = new FMCostFun(
       instances,
       numClasses,
@@ -300,9 +190,11 @@ class FactorizationMachine(override val uid: String,
       featuresStd,
       featuresMean,
       $(regParam),
-    $(elasticNetParam))
+      $(elasticNetParam))
 
-    val optimizer = new SimpleSGD[BDV[Double]](maxIter = $(maxIter))
+    val optimizer = new L2Regularization[BDV[Double]](
+      $(regParam),
+      maxIter = $(maxIter), stepSize = 4, tolerance = $(tol))
 
     /*
      * Initialize factorization Machine weights
@@ -391,13 +283,7 @@ class FactorizationMachine(override val uid: String,
       new FactorizationMachineModel(uid, coefficients)
     )
 
-    val fMachineSummary = new BinaryFactorizationMachineTrainingSummary(
-      model.transform(dataset),
-      $(probabilityCol),
-      $(labelCol),
-      objectiveHistory)
-
-    model.setSummary(fMachineSummary)
+    model
   }
 
   override def copy(extra: ParamMap): FactorizationMachine = defaultCopy(extra)
@@ -436,7 +322,8 @@ class FactorizationMachine(override val uid: String,
  * Model produced by [[FactorizationMachine]].
  */
 @Experimental
-private object FactorizationMachineModel {
+//TODO: make it private again
+object FactorizationMachineModel {
 
   case class MarginData(margin: Double, auxiliaryVector: BDV[Double])
 
@@ -513,10 +400,9 @@ private object FactorizationMachineModel {
 
 
 @Experimental
-class FactorizationMachineModel private[ml] (
-                                              override val uid: String,
-                                              val coefficients: FMCoefficients)
-  extends ProbabilisticClassificationModel[Vector, FactorizationMachineModel]
+class FactorizationMachineModel private[ml](override val uid: String,
+                                            val coefficients: FMCoefficients)
+  extends PredictionModel[Vector, FactorizationMachineModel]
   with FactorizationMachineParams {
 
 
@@ -540,232 +426,31 @@ class FactorizationMachineModel private[ml] (
    * model will not learn interactions.
    */
   if (latentDimension > 0 && coefficients.quadratic.numNonzeros == 0)
-    logWarning("Model does not learn the interactions, unless initialized with non-zero quadratic weights.")
+    logWarning("ModelInitializationWarning: " +
+      "Model will not learn the interactions further, " +
+      "unless initialized with non-zero quadratic weights.")
 
 
-  override val numClasses: Int = 2
-
-  override def setThresholds(value: Array[Double]): this.type = super.setThresholds(value)
-
-  override def getThresholds: Array[Double] = super.getThresholds
-
+  val numClasses: Int = 2
 
   /** Score (probability) for class label 1.  For binary classification only. */
   // TODO: Perhaps needs change if more generalized FM
   private val score: Vector => Double = (features) => {
     val m = MarginAndAuxiliarySum(features, coefficients).margin
-    1.0 / (1.0 + math.exp(-m))
-  }
-
-
-  private var trainingSummary: Option[FactorizationMachineTrainingSummary] = None
-
-  /**
-   * Gets summary of model on training set. An exception is
-   * thrown if `trainingSummary == None`.
-   */
-  def summary: FactorizationMachineTrainingSummary = trainingSummary match {
-    case Some(smry) => smry
-    case None =>
-      throw new SparkException(
-        "No training summary available for this FactorizationMachineModel",
-        new NullPointerException())
-  }
-
-  private[classification] def setSummary(summary: FactorizationMachineTrainingSummary)
-  : this.type = {
-    this.trainingSummary = Some(summary)
-    this
-  }
-
-  /** Indicates whether a training summary exists for this model instance. */
-  def hasSummary: Boolean = trainingSummary.isDefined
-
-  /**
-   * Evaluates the model on a testset.
-   * @param dataset Test dataset to evaluate model on.
-   */
-  // TODO: decide on a good name before exposing to public API
-  private[classification] def evaluate(dataset: DataFrame): FactorizationMachineSummary = {
-    new BinaryFactorizationMachineSummary(this.transform(dataset), $(probabilityCol), $(labelCol))
+    math.signum(m)
   }
 
   /**
    * Predict label for the given feature vector.
-   * The behavior of this can be adjusted using [[thresholds]].
    */
-  override protected def predict(features: Vector): Double = {
-    // Note: We should use getThreshold instead of $(threshold) since getThreshold is overridden.
-    if (score(features) > getThreshold) 1 else 0
-  }
-
-  override protected def raw2probabilityInPlace(rawPrediction: Vector): Vector = {
-    rawPrediction match {
-      case dv: DenseVector =>
-        var i = 0
-        val size = dv.size
-        while (i < size) {
-          dv.values(i) = 1.0 / (1.0 + math.exp(-dv.values(i)))
-          i += 1
-        }
-        dv
-      case sv: SparseVector =>
-        throw new RuntimeException("Unexpected error in FactorizationMachineModel:" +
-          " raw2probabilitiesInPlace encountered SparseVector")
-    }
-  }
-
-  override protected def predictRaw(features: Vector): Vector = {
-    val m = MarginAndAuxiliarySum(features, coefficients).margin
-    Vectors.dense(-m, m)
-  }
+  override protected def predict(features: Vector): Double = score(features)
 
 
   override def copy(extra: ParamMap): FactorizationMachineModel = {
     val newModel = copyValues(new FactorizationMachineModel(uid, coefficients), extra)
-    if (trainingSummary.isDefined) newModel.setSummary(trainingSummary.get)
     newModel.setParent(parent)
   }
 
-  override protected def raw2prediction(rawPrediction: Vector): Double = {
-    val t = getThreshold
-    val rawThreshold = if (t == 0.0) {
-      Double.NegativeInfinity
-    } else if (t == 1.0) {
-      Double.PositiveInfinity
-    } else {
-      math.log(t / (1.0 - t))
-    }
-    if (rawPrediction(1) > rawThreshold) 1 else 0
-  }
-
-  override protected def probability2prediction(probability: Vector): Double = {
-    if (probability(1) > getThreshold) 1 else 0
-  }
-
-}
-
-/**
- * Abstraction for multinomial Factorization Machine Training results.
- * Currently, the training summary ignores the training weights except
- * for the objective trace.
- */
-sealed trait FactorizationMachineTrainingSummary extends FactorizationMachineSummary {
-
-  /** objective function (scaled loss + regularization) at each iteration. */
-  def objectiveHistory: Array[Double]
-
-  /** Number of training iterations until termination */
-  def totalIterations: Int = objectiveHistory.length
-
-}
-
-/**
- * Abstraction for Factorization Machine Results for a given model.
- */
-sealed trait FactorizationMachineSummary extends Serializable {
-
-  /** Dataframe outputted by the model's `transform` method. */
-  def predictions: DataFrame
-
-  /** Field in "predictions" which gives the calibrated probability of each instance as a vector. */
-  def probabilityCol: String
-
-  /** Field in "predictions" which gives the the true label of each instance. */
-  def labelCol: String
-
-}
-
-/**
- * :: Experimental ::
- * Factorization Machine training results.
- * @param predictions dataframe outputted by the model's `transform` method.
- * @param probabilityCol field in "predictions" which gives the calibrated probability of
- *                       each instance as a vector.
- * @param labelCol field in "predictions" which gives the true label of each instance.
- * @param objectiveHistory objective function (scaled loss + regularization) at each iteration.
- */
-@Experimental
-class BinaryFactorizationMachineTrainingSummary private[classification] (
-                                                                          predictions: DataFrame,
-                                                                          probabilityCol: String,
-                                                                          labelCol: String,
-                                                                          val objectiveHistory: Array[Double])
-  extends BinaryFactorizationMachineSummary(predictions, probabilityCol, labelCol)
-  with FactorizationMachineTrainingSummary {
-
-}
-
-/**
- * :: Experimental ::
- * Binary classification results for a given model.
- * @param predictions dataframe outputted by the model's `transform` method.
- * @param probabilityCol field in "predictions" which gives the calibrated probability of
- *                       each instance.
- * @param labelCol field in "predictions" which gives the true label of each instance.
- */
-@Experimental
-class BinaryFactorizationMachineSummary private[classification] (@transient override val predictions: DataFrame,
-                                                                 override val probabilityCol: String,
-                                                                 override val labelCol: String) extends FactorizationMachineSummary {
-
-  private val sqlContext = predictions.sqlContext
-  import sqlContext.implicits._
-
-  /**
-   * Returns a BinaryClassificationMetrics object.
-   */
-  // TODO: Allow the user to vary the number of bins using a setBins method in
-  // BinaryClassificationMetrics. For now the default is set to 100.
-  @transient private val binaryMetrics = new BinaryClassificationMetrics(
-    predictions.select(probabilityCol, labelCol).map {
-      case Row(score: Vector, label: Double) => (score(1), label)
-    }, 100
-  )
-
-  /**
-   * Returns the receiver operating characteristic (ROC) curve,
-   * which is an Dataframe having two fields (FPR, TPR)
-   * with (0.0, 0.0) prepended and (1.0, 1.0) appended to it.
-   * @see http://en.wikipedia.org/wiki/Receiver_operating_characteristic
-   */
-  @transient lazy val roc: DataFrame = binaryMetrics.roc().toDF("FPR", "TPR")
-
-  /**
-   * Computes the area under the receiver operating characteristic (ROC) curve.
-   */
-  lazy val areaUnderROC: Double = binaryMetrics.areaUnderROC()
-
-  /**
-   * Returns the precision-recall curve, which is an Dataframe containing
-   * two fields recall, precision with (0.0, 1.0) prepended to it.
-   */
-  @transient lazy val pr: DataFrame = binaryMetrics.pr().toDF("recall", "precision")
-
-  /**
-   * Returns a dataframe with two fields (threshold, F-Measure) curve with beta = 1.0.
-   */
-  @transient lazy val fMeasureByThreshold: DataFrame = {
-    binaryMetrics.fMeasureByThreshold().toDF("threshold", "F-Measure")
-  }
-
-  /**
-   * Returns a dataframe with two fields (threshold, precision) curve.
-   * Every possible probability obtained in transforming the dataset are used
-   * as thresholds used in calculating the precision.
-   */
-  @transient lazy val precisionByThreshold: DataFrame = {
-    binaryMetrics.precisionByThreshold().toDF("threshold", "precision")
-  }
-
-  /**
-   * Returns a dataframe with two fields (threshold, recall) curve.
-   * Every possible probability obtained in transforming the dataset are used
-   * as thresholds used in calculating the recall.
-   */
-  @transient lazy val recallByThreshold: DataFrame = {
-    binaryMetrics.recallByThreshold().toDF("threshold", "recall")
-  }
 }
 
 
@@ -801,7 +486,7 @@ private class FMAggregator(coefficients: FMCoefficients,
   private var gradientSum = new FMCoefficients(
       intercept = 0.0,
       linear = Vectors.zeros(numFeatures),
-      quadratic = DenseMatrix.zeros(numFeatures, coefficients.quadratic.numCols)
+      quadratic = DenseMatrix.zeros(numFeatures, latentDimension)
     )
 
   /**
@@ -856,11 +541,14 @@ private class FMAggregator(coefficients: FMCoefficients,
           // discrepancy * [ feat_j * auxVec_k  - w_jk * feat_j^2 ]   // TODO: Check logic
           for(index <- numFeatures + 1 to currentGradientVector.length - 1) {
             val (row, col) = FMCoefficients.getRowColIndexFromPosition(index, numFeatures, latentDimension)
-            currentGradientVector(index) = outputDiscrepancy * (
-              features(row) * (
-                auxiliaryVector(col) - coefficients.quadratic(row, col) * features(row)
+            if (featuresStd(row) != 0.0 && features(row) != 0.0) {
+              val value = features(row) / featuresStd(row)
+              currentGradientVector(index) = outputDiscrepancy * (
+                value * (
+                  auxiliaryVector(col) - coefficients.quadratic(row, col) * value
+                  )
                 )
-              )
+            }
           }
 
           if (label > 0) {
@@ -877,7 +565,7 @@ private class FMAggregator(coefficients: FMCoefficients,
       gradientSum += FMCoefficients
         .fromBreezeVector(
           currentGradientVector,
-          numFeatures, latentDimension)                  //TODO: NEED CHANGE
+          numFeatures, latentDimension)
 
       this
     }
@@ -933,7 +621,7 @@ private class FMCostFun(instances: RDD[Instance],
                         featuresStd: Array[Double],
                         featuresMean: Array[Double],
                         regParam: Double,
-                         elasticNetParam: Double) extends DiffFunction[BDV[Double]] {
+                        elasticNetParam: Double) extends DiffFunction[BDV[Double]] {
 
 
   val regParamL1 = elasticNetParam * regParam
@@ -1023,7 +711,8 @@ private class FMCostFun(instances: RDD[Instance],
  * Model weights for [[FactorizationMachineModel]].
  */
 @Experimental
-private[classification] class FMCoefficients(val intercept: Double,
+//TODO: Make it private[classification]
+class FMCoefficients(val intercept: Double,
                                              val linear: Vector,
                                              val quadratic: DenseMatrix) extends Serializable {
 
@@ -1117,7 +806,8 @@ private[classification] class FMCoefficients(val intercept: Double,
 
 }
 
-private[classification] object FMCoefficients {
+//TODO: Make it private[classification]
+object FMCoefficients {
 
   implicit class scaleFmw(val scale: Double) {
     def *(FMCoefficients: FMCoefficients) = FMCoefficients * scale

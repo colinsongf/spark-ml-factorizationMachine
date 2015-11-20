@@ -16,7 +16,7 @@ import scala.collection.immutable.HashSet
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, FileSystem}
 
-import org.apache.spark.ml.classification.{FactorizationMachine, LogisticRegression}
+import org.apache.spark.ml.classification.{FMCoefficients, FactorizationMachineModel, FactorizationMachine, LogisticRegression}
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.{SparkContext, SparkConf}
 import org.apache.spark.sql.{DataFrame, Row, SQLContext}
@@ -120,7 +120,6 @@ object Driver {
     import MLUtil.FileLoader._
 
 
-
     /*
      * Features set
      */
@@ -200,8 +199,8 @@ object Driver {
     /*
      * Factorization Machine
      */
-    val fMachine = new FactorizationMachine(1)
-      .setMaxIter(1000)
+    val fMachine = new FactorizationMachine(2)
+      .setMaxIter(100)
       .setRegParam(0.000)
       .setElasticNetParam(0.95)
 
