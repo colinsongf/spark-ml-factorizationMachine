@@ -18,12 +18,11 @@ import scala.collection.mutable
 import scala.util.Random
 
 import breeze.linalg.{DenseVector => BDV}
-import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
+import breeze.optimize.{CachedDiffFunction, DiffFunction}
 
 import com.github.fommil.netlib.F2jBLAS
 
 import org.apache.spark.ml.param.ParamMap
-import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.{SparkException, Logging}
 import org.apache.spark.annotation.Experimental
@@ -42,9 +41,15 @@ import org.apache.spark.mllib.frommaster.{MultiClassSummarizer => NewMultiClassS
 /**
  * Params for Factorization Machine.
  */
-private[classification] trait FactorizationMachineParams extends PredictorParams
-with HasRegParam with HasElasticNetParam with HasMaxIter with HasFitIntercept with HasTol
-with HasStandardization with HasWeightCol {
+private[classification] trait FactorizationMachineParams
+  extends PredictorParams
+  with HasRegParam
+  with HasElasticNetParam
+  with HasMaxIter
+  with HasFitIntercept
+  with HasTol
+  with HasStandardization
+  with HasWeightCol {
 }
 
 /**
@@ -322,8 +327,7 @@ class FactorizationMachine(override val uid: String,
  * Model produced by [[FactorizationMachine]].
  */
 @Experimental
-//TODO: make it private again
-object FactorizationMachineModel {
+private object FactorizationMachineModel {
 
   case class MarginData(margin: Double, auxiliaryVector: BDV[Double])
 
@@ -366,7 +370,7 @@ object FactorizationMachineModel {
       coefficients.linear.toBreeze.dot(standardizedFeatures.toBreeze)
 
     // quadratic
-    margin +=       // TODO: NEED CHECK OF LOGIC
+    margin +=
       (0 to coefficients.quadratic.numCols - 1).map{col =>
 
         // Sum over j
@@ -433,17 +437,13 @@ class FactorizationMachineModel private[ml](override val uid: String,
 
   val numClasses: Int = 2
 
-  /** Score (probability) for class label 1.  For binary classification only. */
-  // TODO: Perhaps needs change if more generalized FM
-  private val score: Vector => Double = (features) => {
-    val m = MarginAndAuxiliarySum(features, coefficients).margin
-    math.signum(m)
-  }
-
   /**
    * Predict label for the given feature vector.
    */
-  override protected def predict(features: Vector): Double = score(features)
+  override protected def predict(features: Vector): Double = {
+    val m = MarginAndAuxiliarySum(features, coefficients).margin
+    math.signum(m)
+  }
 
 
   override def copy(extra: ParamMap): FactorizationMachineModel = {
