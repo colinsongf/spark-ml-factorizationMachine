@@ -170,8 +170,6 @@ object Driver {
       .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
       .toDF("label", "features")
 
-
-    trainingData.show(20, truncate = false)
 //
 //
 //    /*
@@ -201,15 +199,15 @@ object Driver {
      */
     val lr = new LogisticRegression()
       .setMaxIter(50)
-      .setRegParam(0.000)
+      .setRegParam(0.001)
       .setElasticNetParam(0.95)
 
     /*
      * Factorization Machine
      */
-    val fMachine = new FactorizationMachine(5)
+    val fMachine = new FactorizationMachine(0)
       .setMaxIter(50)
-      .setRegParam(0.000)
+      .setRegParam(0.001)
       .setElasticNetParam(0.95)
 
     /*
