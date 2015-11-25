@@ -344,8 +344,9 @@ class FactorizationMachine(override val uid: String,
         if ($(fitIntercept)) math.log( histogram(1) / histogram(0) ) else 0.0,
       linear =
         Vectors.zeros(numFeatures),
-      quadratic = generateScaledNormalRandomMatrix(
-              numFeatures, latentDimension, scale = 1e-2)
+      quadratic =
+        generateScaledNormalRandomMatrix(
+          numFeatures, latentDimension, scale = 1e-2)
     )
 
 
@@ -826,8 +827,13 @@ private class FMAggregator(coefficients: FMCoefficients,
   private val numFeatures = coefficients.linear.size
   private val latentDimension = coefficients.quadratic.numCols
 
-  private var weightSum = 0.0       // no change
-  private var lossSum = 0.0         // no change either
+  private var weightSum = 0.0
+  private var lossSum = 0.0
+  // Note: We follow Row-major convention for the quadratic weights
+  // The only way to get Row-major arrangement in Spark is by setting
+  // isTransposed flag in DenseMatrix.
+  // For gradientSum even the initialization needs to be row major for
+  // all further updates to follow the same convention
   private var gradientSum = new FMCoefficients(
       intercept = 0.0,
       linear = Vectors.zeros(numFeatures),
