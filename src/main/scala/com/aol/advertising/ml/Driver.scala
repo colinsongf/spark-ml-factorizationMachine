@@ -172,21 +172,28 @@ object Driver {
 
 
     trainingData.show(20, truncate = false)
+//
+//
+//    /*
+//    * Test/validation data
+//    * (with the same loader specifications
+//    * as used in importing training data.)
+//    */
+//    val testData = sc.loadCsvFileAsRDD(
+//      trainingDataFile.replaceFirst(".TR.gz", ".TR.gz"),
+//      withFeatureIndexing = trainingDataRddAndFeatureMap.featureIndexMap,
+//      withLoaderParams = trainingDataRddAndFeatureMap.loaderParams
+//    ).data
+//      .repartition(sc.defaultMinPartitions * 3)
+//      .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
+//      .toDF("label", "features")
+//
 
+//    val trainingData = sqlContext.createDataFrame(Seq(
+//      (0.0, Vectors.dense(0.0, 1.0, 2.0)),
+//      (1.0, Vectors.dense(3.0, 4.0, 5.0))
+//    )).toDF("label", "features")
 
-    /*
-    * Test/validation data
-    * (with the same loader specifications
-    * as used in importing training data.)
-    */
-    val testData = sc.loadCsvFileAsRDD(
-      trainingDataFile.replaceFirst(".TR.gz", ".TR.gz"),
-      withFeatureIndexing = trainingDataRddAndFeatureMap.featureIndexMap,
-      withLoaderParams = trainingDataRddAndFeatureMap.loaderParams
-    ).data
-      .repartition(sc.defaultMinPartitions * 3)
-      .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
-      .toDF("label", "features")
 
 
     /*
@@ -200,7 +207,7 @@ object Driver {
     /*
      * Factorization Machine
      */
-    val fMachine = new FactorizationMachine(2)
+    val fMachine = new FactorizationMachine(5)
       .setMaxIter(50)
       .setRegParam(0.000)
       .setElasticNetParam(0.95)
@@ -213,7 +220,9 @@ object Driver {
 
 
     println(s"${lrModel.intercept} ${lrModel.weights}")
-    println(s"${fmModel.coefficients.intercept} ${fmModel.coefficients.linear} ${fmModel.coefficients.quadratic}")
+    println(s"${fmModel.coefficients.intercept} ${fmModel.coefficients.linear}")
+    if (fMachine.latentDimension > 0)
+      println(s"${fmModel.coefficients.quadratic}")
 
 //    /*
 //     * Test data matching

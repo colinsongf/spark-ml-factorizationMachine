@@ -14,7 +14,7 @@ package org.apache.spark.ml.classification
 import scala.collection.mutable
 import scala.util.Random
 
-import breeze.linalg.{DenseVector => BDV, sum}
+import breeze.linalg.{DenseVector => BDV}
 import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
 
 import com.github.fommil.netlib.F2jBLAS
@@ -195,16 +195,13 @@ class FactorizationMachine(override val uid: String,
 
   /**
    * Set the convergence tolerance of iterations.
-   * Smaller value will lead to higher accuracy with the cost of more iterations.
-   * Default is 1E-6.
    * @group setParam
    */
   def setTol(value: Double): this.type = set(tol, value)
   setDefault(tol -> 1E-6)
 
   /**
-   * Whether to fit an intercept term.
-   * Default is true.
+   * Whether to include an intercept term in the margin.
    * @group setParam
    */
   def setFitIntercept(value: Boolean): this.type = set(fitIntercept, value)
@@ -282,6 +279,7 @@ class FactorizationMachine(override val uid: String,
       logError(msg)
       throw new SparkException(msg)
     }
+
     val featuresMean = summarizer.mean.toArray
     val featuresStd = summarizer.variance.toArray.map(math.sqrt)
 
@@ -347,11 +345,13 @@ class FactorizationMachine(override val uid: String,
       linear =
         Vectors.zeros(numFeatures),
       quadratic = generateScaledNormalRandomMatrix(
-        numFeatures, latentDimension, scale = 1e-2)
+              numFeatures, latentDimension, scale = 1e-2)
     )
+
 
     // All the coefficients laid as a long vector
     val initCoefficientLongVector = initialCoefficients.flattenToBreezeVector
+
 
     val states = optimizer.iterations(new CachedDiffFunction(costFun),
       initCoefficientLongVector)
@@ -509,10 +509,9 @@ private object FactorizationMachineModel {
       coefficients.linear.toBreeze.dot(standardizedFeatures.toBreeze)
 
     // quadratic
-    margin +=       // TODO: NEED CHECK OF LOGIC
+    margin +=
       (0 to coefficients.quadratic.numCols - 1).map{col =>
 
-        // Sum over j
         // The individual terms: v_jk * feat_j
         // and the corresponding squares: v_jk^2 * feat_j^2
         val termsAndSquaredTerms = activeFeatures
@@ -535,6 +534,7 @@ private object FactorizationMachineModel {
 
         0.5 * (math.pow(sumOfTerms, 2) - sumOfSquaredTerms)
       }.sum
+
 
     MarginData(margin, auxiliaryVector)
   }
@@ -831,7 +831,7 @@ private class FMAggregator(coefficients: FMCoefficients,
   private var gradientSum = new FMCoefficients(
       intercept = 0.0,
       linear = Vectors.zeros(numFeatures),
-      quadratic = DenseMatrix.zeros(numFeatures, coefficients.quadratic.numCols)
+      quadratic = DenseMatrix.zeros(latentDimension, numFeatures).transpose
     )
 
   /**
@@ -907,10 +907,8 @@ private class FMAggregator(coefficients: FMCoefficients,
             "only supports binary classification for now.")
       }
       weightSum += weight
-      gradientSum += FMCoefficients
-        .fromBreezeVector(
-          currentGradientVector,
-          numFeatures, latentDimension)                  //TODO: NEED CHANGE
+      gradientSum += FMCoefficients.fromBreezeVector(
+        currentGradientVector, numFeatures, latentDimension)                  //TODO: NEED CHANGE
 
       this
     }

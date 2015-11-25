@@ -1,6 +1,6 @@
 // Versions
 val scalaVer = "2.11.7"
-val sparkVer = "1.5.1"
+val sparkVer = "1.5.2"
 val aolmlVer = "1.0"
 
 // Log Level
@@ -21,9 +21,7 @@ libraryDependencies ++= Seq(
   "org.apache.spark"              %%    "spark-core"    %     sparkVer,
   "org.apache.spark"              %%    "spark-mllib"   %     sparkVer,
   "org.apache.spark"              %%    "spark-sql"     %     sparkVer,
-  "com.github.scopt"              %%    "scopt"         %     "3.3.0",
-  "com.databricks"                %%    "spark-csv"     %     "1.2.0",
-  "com.holdenkarau"               % "spark-testing-base_2.10"   %   "1.5.1_0.2.1"
+  "com.github.scopt"              %%    "scopt"         %     "3.3.0"
 )
 
 /*
