@@ -1,0 +1,7 @@
+# pack-refs with: peeled fully-peeled 
+938569e912e13aa93ee68d4b9035ed4565806eb5 refs/heads/develop
+718a6e1907d0fb3fc9544ed68a452f3fd261963a refs/heads/feature/linearKernel
+938569e912e13aa93ee68d4b9035ed4565806eb5 refs/heads/master
+4afd2b11452ada96aa7d4bfcc5bd1b9398a9d437 refs/remotes/origin/develop
+e2fa77508ed00ec50011a2d2854d6064ffcdfd20 refs/remotes/origin/feature/gradientDescent
+6ad05638c09e420f7ec9607feb334485f86c7b69 refs/remotes/origin/master

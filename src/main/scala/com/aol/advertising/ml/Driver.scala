@@ -11,12 +11,17 @@
 
 package com.aol.advertising.ml
 
+import org.apache.spark.ml.evaluation.BinaryClassificationEvaluator
+import org.apache.spark.ml.param.shared._
+import org.apache.spark.ml.tuning.{TrainValidationSplit, CrossValidator, ParamGridBuilder}
+import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
+
 import scala.collection.immutable.HashSet
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, FileSystem}
 
-import org.apache.spark.ml.classification.{FactorizationMachine, LogisticRegression}
+import org.apache.spark.ml.classification._
 import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.{SparkContext, SparkConf}
 import org.apache.spark.sql.{DataFrame, Row, SQLContext}
@@ -25,7 +30,8 @@ import org.apache.spark.mllib.linalg.{DenseMatrix, Matrices, Vectors, Vector}
 // Scopt Input parser case class
 case class ScoptConfig(locally: Boolean = false,
                        input: String = "",
-                       output: String = ""
+                       output: String = "",
+                       model:Int = 0
                         )
 
 
@@ -74,6 +80,10 @@ object Driver {
         .required()
         .action { (x, c) => c.copy(output = x) }
         .text("output (file path) is a required property [type: String]")
+
+      opt[Int]('m', "model")
+        .action{ (x, c) => c.copy(model = x)}
+        .text("classification model (0: LogisticRegression, 1: FactorizationMachine)")
 
       help("help")
         .text("prints this usage text")
@@ -161,100 +171,107 @@ object Driver {
     val trainingDataRddAndFeatureMap = sc.loadCsvFileAsRDD(
       trainingDataFile,
       withHeader = true,
-      separator = " ")
-     // selectColumns = columnsToSelect,
-     // categoricalFeatures = categoricalVariables)
+      separator = " ",
+      selectColumns = columnsToSelect,
+      categoricalFeatures = categoricalVariables)
 
     val trainingData = trainingDataRddAndFeatureMap.data
       .repartition(sc.defaultMinPartitions * 3)
       .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
       .toDF("label", "features")
 
-//
-//
-//    /*
-//    * Test/validation data
-//    * (with the same loader specifications
-//    * as used in importing training data.)
-//    */
-//    val testData = sc.loadCsvFileAsRDD(
-//      trainingDataFile.replaceFirst(".TR.gz", ".TR.gz"),
-//      withFeatureIndexing = trainingDataRddAndFeatureMap.featureIndexMap,
-//      withLoaderParams = trainingDataRddAndFeatureMap.loaderParams
-//    ).data
-//      .repartition(sc.defaultMinPartitions * 3)
-//      .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
-//      .toDF("label", "features")
-//
 
-//    val trainingData = sqlContext.createDataFrame(Seq(
-//      (0.0, Vectors.dense(0.0, 1.0, 2.0)),
-//      (1.0, Vectors.dense(3.0, 4.0, 5.0))
-//    )).toDF("label", "features")
+
+    /*
+    * Test/validation data
+    * (with the same loader specifications
+    * as used in importing training data.)
+    */
+    val testData = sc.loadCsvFileAsRDD(
+      trainingDataFile.replaceFirst(".TR.gz", ".VA.gz"),
+      withFeatureIndexing = trainingDataRddAndFeatureMap.featureIndexMap,
+      withLoaderParams = trainingDataRddAndFeatureMap.loaderParams
+    ).data
+      .repartition(sc.defaultMinPartitions * 3)
+      .map(point => LabeledPoint( if (point.label == -1.0) 0.0 else point.label, point.features))
+      .toDF("label", "features")
+
+
+    /*
+     * Logistic Regression or Factorization Machine model
+     */
+    val classificationModel = clArgs.model match {
+      case 0 =>
+        new LogisticRegression()
+          .setMaxIter(100)
+          .setFitIntercept(true)
+
+      case 1 =>
+        new FactorizationMachine()
+          .setLatentDimension(5)
+          .setMaxIter(100)
+          .setFitIntercept(true)
+    }
 
 
 
     /*
-     * Logistic Regression model
+     * Cross Validator parameter grid
      */
-    val lr = new LogisticRegression()
-      .setMaxIter(50)
-      .setRegParam(0.001)
-      .setElasticNetParam(0.95)
+    val paramGrid = new ParamGridBuilder()
+      .addGrid(classificationModel.regParam, Array(1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 2e-3, 1e-2, 1e-1, 0.001341682))
+      .addGrid(classificationModel.elasticNetParam, Array(0.95))
+      .build()
 
     /*
-     * Factorization Machine
+     * Perform cross validation over the parameters
      */
-    val fMachine = new FactorizationMachine(0)
-      .setMaxIter(50)
-      .setRegParam(0.001)
-      .setElasticNetParam(0.95)
+    val cv = new CrossValidator()
+      .setEstimator(classificationModel)
+      .setEvaluator(new BinaryClassificationEvaluator)
+      .setEstimatorParamMaps(paramGrid)
+      .setNumFolds(10)
 
     /*
-     * Fit models
+     * Run the grid search and pick up the best model
      */
-    val lrModel = lr.fit(trainingData)
-    val fmModel = fMachine.fit(trainingData)
+    val bestModel = classificationModel match {
+      case m: LogisticRegression =>
+        cv.fit(trainingData)
+          .bestModel.asInstanceOf[LogisticRegressionModel]
 
+      case m: FactorizationMachine =>
+        cv.fit(trainingData)
+          .bestModel.asInstanceOf[FactorizationMachineModel]
+    }
 
-    println(s"${lrModel.intercept} ${lrModel.weights}")
-    println(s"${fmModel.coefficients.intercept} ${fmModel.coefficients.linear}")
-    if (fMachine.latentDimension > 0)
-      println(s"${fmModel.coefficients.quadratic}")
+    /*
+     * Predictions on the test data using the best model
+     */
+    val scoresPredictionsAndLabels = bestModel.transform(testData)
+      .select("label", "probability", "prediction")
+      .map{
+        case Row(label: Double, probability: Vector, prediction: Double) =>
+          (probability(1), prediction, label)
+      }
 
-//    /*
-//     * Test data matching
-//     */
-//    val lrTest = lrModel
-//      .transform(testData)
-//      .select("label","probability", "prediction")
-//      .map{
-//        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
-//      }
-//      .zipWithIndex()
-//      .map{ case ((probability, label), index) => (probability, label, index)}
-//      .toDF("lrProbability", "lrLabel", "id")
-//
-//
-//    val fmTest = fmModel
-//      .transform(testData)
-//      .select("label", "probability", "prediction")
-//      .map{
-//        case Row(label: Double, probability: Vector, prediction: Double) => (probability(1), label)
-//      }
-//      .zipWithIndex()
-//      .map{ case ((probability, label), index) => (probability, label, index)}
-//      .toDF("fmProbability", "fmLabel", "id")
-//
-//
-//    val joinedDF = fmTest
-//      .join(lrTest, usingColumn = "id")
-//      //.join(newlrTest, usingColumn = "id")
-//
-//    joinedDF
-//    //  .filter(joinedDF("fmProbability") !== joinedDF("lrProbability"))
-//      .show(truncate = false)
+    /*
+     * Performance Metrics
+     */
+    // Area Under ROC
+    val metrics = new BinaryClassificationMetrics(
+      scoresPredictionsAndLabels
+        .map(entry => (entry._1, entry._3))
+    )
 
+    println(s"AUC = ${metrics.areaUnderROC()}")
+
+    bestModel match {
+      case m: FactorizationMachineModel =>
+        val mod = m.asInstanceOf[FactorizationMachineModel]
+        println(s"Weights = ${mod.coefficients.intercept}; ${mod.coefficients.linear}")
+      case _ => println("")
+    }
     sc.stop()
   }
 }

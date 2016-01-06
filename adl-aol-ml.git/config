@@ -1,0 +1,11 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = true
+	ignorecase = true
+	precomposeunicode = true
+[remote "origin"]
+	url = https://njoshi15@stash.ops.aol.com/scm/adl/adl-aol-ml.git
+	fetch = +refs/*:refs/*
+	mirror = true
+	pushurl = https://nikhiljjoshi@github.com/nikhiljjoshi/spark-ml-factorizationMachine

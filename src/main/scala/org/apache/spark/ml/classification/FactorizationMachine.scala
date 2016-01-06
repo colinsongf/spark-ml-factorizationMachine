@@ -11,6 +11,8 @@
 
 package org.apache.spark.ml.classification
 
+
+
 import scala.collection.mutable
 import scala.util.Random
 
@@ -19,29 +21,53 @@ import breeze.optimize.{CachedDiffFunction, DiffFunction, LBFGS, OWLQN}
 
 import com.github.fommil.netlib.F2jBLAS
 
-import org.apache.spark.ml.param.ParamMap
+import org.apache.spark.ml.param.{ParamValidators, IntParam, Params, ParamMap}
+import org.apache.spark.ml.param.shared._
+import org.apache.spark.ml.feature.Instance
+import org.apache.spark.mllib.linalg._
+import org.apache.spark.mllib.stat.MultivariateOnlineSummarizer
 import org.apache.spark.mllib.evaluation.BinaryClassificationMetrics
 import org.apache.spark.mllib.util.MLUtils
 import org.apache.spark.{SparkException, Logging}
 import org.apache.spark.annotation.Experimental
-import org.apache.spark.ml.feature.Instance
-import org.apache.spark.ml.param.shared._
-import org.apache.spark.mllib.linalg._
-import org.apache.spark.ml.util.Identifiable
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{Row, DataFrame}
 import org.apache.spark.sql.functions.{lit, col}
 import org.apache.spark.storage.StorageLevel
 
-import org.apache.spark.mllib.frommaster.MultivariateOnlineSummarizer
-import org.apache.spark.mllib.frommaster.{MultiClassSummarizer => NewMultiClassSummarizer}
+
+/**
+ * Trait for shared param regParam.
+ */
+private[ml] trait HasLatentDimension extends Params {
+
+  /**
+   * Param for regularization parameter (>= 0).
+   * @group param
+   */
+  final val latentDimension: IntParam = new IntParam(this, "latentDimension", "(Factorization Machine) Latent Dimension (>= 0)", ParamValidators.gtEq(0))
+
+  /** @group getParam */
+  final def getLatentDimension: Int = $(latentDimension)
+}
+
+
 
 /**
  * Params for Factorization Machine.
  */
 private[classification] trait FactorizationMachineParams extends ProbabilisticClassifierParams
-with HasRegParam with HasElasticNetParam with HasMaxIter with HasFitIntercept with HasTol
+with HasLatentDimension with HasRegParam with HasElasticNetParam with HasMaxIter with HasFitIntercept with HasTol
 with HasStandardization with HasWeightCol with HasThreshold {
+
+  /**
+   * Set Latent dimension for the Factorization Machine, a non-negative Integer
+   *
+   * Default is 0 (that makes it equivalent to a Logistic Regression)
+   * @group setParam
+   */
+  def setLatentDimension(value: Int): this.type = set(latentDimension, value)
+  setDefault(latentDimension -> 0)
 
   /**
    * Set threshold in binary classification, in range [0, 1].
@@ -140,8 +166,19 @@ with HasStandardization with HasWeightCol with HasThreshold {
     }
   }
 
+  /**
+   * The [latentDimension] must be a non-negative integer
+   */
+  protected def checkLatentDimension(): Unit = {
+    require($(latentDimension) >= 0,
+      "Latent dimensionality must be a non-negative whole number. " +
+        s"Found this.latentDimension = $latentDimension.")
+
+  }
+
   override def validateParams(): Unit = {
     checkThresholdConsistency()
+    checkLatentDimension()
   }
 }
 
@@ -153,19 +190,12 @@ with HasStandardization with HasWeightCol with HasThreshold {
  * in the future.
  */
 @Experimental
-class FactorizationMachine(override val uid: String,
-                           val latentDimension: Int)
+class FactorizationMachine(override val uid: String)
   extends ProbabilisticClassifier[Vector, FactorizationMachine, FactorizationMachineModel]
   with FactorizationMachineParams with Logging {
 
-  def this(latentDimension: Int) = this(
-    Identifiable.randomUID("factormachine"),
-    latentDimension = latentDimension)
 
-
-  require(latentDimension >= 0,
-    "Latent dimensionality must be a non-negative whole number. " +
-      s"Found this.latentDimension = $latentDimension.")
+  def this() = this("factor-machine")
 
   /**
    * Set the regularization parameter.
@@ -249,16 +279,16 @@ class FactorizationMachine(override val uid: String,
     if (handlePersistence) instances.persist(StorageLevel.MEMORY_AND_DISK)
 
     val (summarizer, labelSummarizer) = {
-      val seqOp = (c: (MultivariateOnlineSummarizer, NewMultiClassSummarizer),
+      val seqOp = (c: (MultivariateOnlineSummarizer, MultiClassSummarizer),
                    instance: Instance) =>
         (c._1.add(instance.features, instance.weight), c._2.add(instance.label, instance.weight))
 
-      val combOp = (c1: (MultivariateOnlineSummarizer, NewMultiClassSummarizer),
-                    c2: (MultivariateOnlineSummarizer, NewMultiClassSummarizer)) =>
+      val combOp = (c1: (MultivariateOnlineSummarizer, MultiClassSummarizer),
+                    c2: (MultivariateOnlineSummarizer, MultiClassSummarizer)) =>
         (c1._1.merge(c2._1), c1._2.merge(c2._2))
 
       instances.treeAggregate(
-        new MultivariateOnlineSummarizer, new NewMultiClassSummarizer)(seqOp, combOp)
+        new MultivariateOnlineSummarizer, new MultiClassSummarizer)(seqOp, combOp)
     }
 
     val histogram = labelSummarizer.histogram
@@ -290,7 +320,7 @@ class FactorizationMachine(override val uid: String,
     val costFun = new FMCostFun(
       instances,
       numClasses,
-      latentDimension,
+      $(latentDimension),
       $(fitIntercept),
       $(standardization),
       featuresStd,
@@ -321,7 +351,7 @@ class FactorizationMachine(override val uid: String,
             // quadratic terms
             else {
               val (row, _) = FMCoefficients.getRowColIndexFromPosition(
-                index, numFeatures, latentDimension)
+                index, numFeatures, $(latentDimension))
               if (featuresStd(row) != 0.0)
                 regParamL1 / featuresStd(row)
               else 0.0
@@ -346,7 +376,7 @@ class FactorizationMachine(override val uid: String,
         Vectors.zeros(numFeatures),
       quadratic =
         generateScaledNormalRandomMatrix(
-          numFeatures, latentDimension, scale = 1e-2)
+          numFeatures, $(latentDimension), scale = 1e-2)
     )
 
 
@@ -395,7 +425,7 @@ class FactorizationMachine(override val uid: String,
           }
         else {
           // quadratic weights
-          val (row, _) = FMCoefficients.getRowColIndexFromPosition(runner, numFeatures, latentDimension)
+          val (row, _) = FMCoefficients.getRowColIndexFromPosition(runner, numFeatures, $(latentDimension))
           rawCoefficients(runner) *= {
             if (featuresStd(row) != 0.0)
               1.0 / featuresStd(row)
@@ -410,7 +440,7 @@ class FactorizationMachine(override val uid: String,
         rawCoefficients(0) = 0.0
 
 
-      ( FMCoefficients.fromBreezeVector(rawCoefficients, numFeatures, latentDimension),
+      ( FMCoefficients.fromBreezeVector(rawCoefficients, numFeatures, $(latentDimension)),
         arrayBuilder.result()
         )
     }
@@ -420,7 +450,7 @@ class FactorizationMachine(override val uid: String,
 
     val model = copyValues(
       new FactorizationMachineModel(uid, coefficients)
-    )
+    ).setLatentDimension($(latentDimension))
 
     val fMachineSummary = new BinaryFactorizationMachineTrainingSummary(
       model.transform(dataset),
@@ -554,10 +584,7 @@ class FactorizationMachineModel private[ml] (
   import FactorizationMachineModel._
 
 
-  // TODO: Add override after Spark v > 1.5.1
-  val numFeatures: Int = coefficients.linear.size
-
-  val latentDimension: Int = coefficients.quadratic.numCols
+  override val numFeatures: Int = coefficients.linear.size
 
   require(coefficients.quadratic.numRows == numFeatures,
     "Number of rows in quadratic weight matrix must be equal to numFeatures " +
@@ -570,7 +597,7 @@ class FactorizationMachineModel private[ml] (
    * because update rule is proportional to the current value,
    * model will not learn interactions.
    */
-  if (latentDimension > 0 && coefficients.quadratic.numNonzeros == 0)
+  if ($(latentDimension) > 0 && coefficients.quadratic.numNonzeros == 0)
     logWarning("Model does not learn the interactions, unless initialized with non-zero quadratic weights.")
 
 

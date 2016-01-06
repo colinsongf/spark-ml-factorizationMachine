@@ -1,6 +1,6 @@
 // Versions
 val scalaVer = "2.11.7"
-val sparkVer = "1.5.2"
+val sparkVer = "1.6.0"
 val aolmlVer = "1.0"
 
 // Log Level
